@@ -116,13 +116,6 @@ class UseallInfra {
   }
 
   iniciar() {
-    document.getElementById("openFile")?.classList.remove("hidden");
-    document.getElementById("print")?.classList.remove("hidden");
-    document.getElementById("download")?.classList.remove("hidden");
-    document.getElementById("secondaryOpenFile")?.classList.remove("hidden");
-    document.getElementById("secondaryPrint")?.classList.remove("hidden");
-    document.getElementById("secondaryDownload")?.classList.remove("hidden");
-
     const queryString = document.location.search.substring(1);
     const paramsUrl = this.parseQueryString(queryString);
 
@@ -199,6 +192,18 @@ class UseallInfra {
     }
   }
 
+  setarPermissoesDeAcoes(permiteDownload) {
+    document.getElementById("openFile")?.classList.add("hidden");
+    document.getElementById("secondaryOpenFile")?.classList.add("hidden");
+    document.getElementById("print")?.classList.add("hidden");
+    document.getElementById("secondaryPrint")?.classList.add("hidden");
+
+    if (!permiteDownload) {
+      document.getElementById("download")?.classList.add("hidden");
+      document.getElementById("secondaryDownload")?.classList.add("hidden");
+    }
+  }
+
   carregarDocumento(callback) {
     if (this.controllerApi === "Docs") {
       const urlPost =
@@ -221,9 +226,7 @@ class UseallInfra {
             "/" +
             encodeURIComponent(response.Content.NomeArquivo);
 
-          if (response.Content.Download) {
-            document.getElementById("download").classList.remove("hidden");
-          }
+          this.setarPermissoesDeAcoes(response.Content.Download);
 
           callback(docUrl);
         },
