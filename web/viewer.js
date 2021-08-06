@@ -15,6 +15,10 @@
 
 import { AppOptions } from "./app_options.js";
 import { PDFViewerApplication } from "./app.js";
+import Useall from "./useall.js";
+
+AppOptions.set("enablePrintAutoRotate", true);
+Useall.iniciar();
 
 /* eslint-disable-next-line no-unused-vars */
 const pdfjsVersion =
@@ -196,7 +200,10 @@ function getViewerConfiguration() {
   };
 }
 
-function webViewerLoad() {
+function webViewerLoad(urlUseall) {
+  if (urlUseall) {
+    AppOptions.set("defaultUrl", urlUseall);
+  }
   const config = getViewerConfiguration();
   if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("PRODUCTION")) {
     Promise.all([
@@ -206,10 +213,6 @@ function webViewerLoad() {
       PDFViewerApplication.run(config);
     });
   } else {
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("CHROME")) {
-      AppOptions.set("defaultUrl", defaultUrl);
-    }
-
     if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
       // Give custom implementations of the default viewer a simpler way to
       // set various `AppOptions`, by dispatching an event once all viewer
@@ -241,13 +244,21 @@ if (document.blockUnblockOnload) {
   document.blockUnblockOnload(true);
 }
 
-if (
-  document.readyState === "interactive" ||
-  document.readyState === "complete"
-) {
-  webViewerLoad();
-} else {
-  document.addEventListener("DOMContentLoaded", webViewerLoad, true);
-}
+Useall.carregarDocumento(urlUseall => {
+  if (
+    document.readyState === "interactive" ||
+    document.readyState === "complete"
+  ) {
+    webViewerLoad(urlUseall);
+  } else {
+    document.addEventListener(
+      "DOMContentLoaded",
+      () => {
+        webViewerLoad(urlUseall);
+      },
+      true
+    );
+  }
+});
 
 export { PDFViewerApplication, AppOptions as PDFViewerApplicationOptions };
