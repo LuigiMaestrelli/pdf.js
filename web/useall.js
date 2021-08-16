@@ -195,8 +195,6 @@ class UseallInfra {
   setarPermissoesDeAcoes(permiteDownload) {
     document.getElementById("openFile")?.classList.add("hidden");
     document.getElementById("secondaryOpenFile")?.classList.add("hidden");
-    document.getElementById("print")?.classList.add("hidden");
-    document.getElementById("secondaryPrint")?.classList.add("hidden");
 
     if (!permiteDownload) {
       document.getElementById("download")?.classList.add("hidden");
