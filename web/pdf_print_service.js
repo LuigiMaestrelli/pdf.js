@@ -16,6 +16,7 @@
 import { PDFPrintServiceFactory, PDFViewerApplication } from "./app.js";
 import { compatibilityParams } from "./app_options.js";
 import { getXfaHtmlForPrinting } from "./print_utils.js";
+import Useall from "./useall.js";
 
 let activeService = null;
 let overlayManager = null;
@@ -92,7 +93,7 @@ PDFPrintService.prototype = {
     if (!hasEqualPageSizes) {
       console.warn(
         "Not all pages have the same size. The printed " +
-          "result may be incorrect!"
+        "result may be incorrect!"
       );
     }
 
@@ -228,48 +229,52 @@ PDFPrintService.prototype = {
 
 const print = window.print;
 window.print = function () {
-  if (activeService) {
-    console.warn("Ignored window.print() because of a pending print job.");
-    return;
-  }
-  ensureOverlay().then(function () {
+  function doPrint() {
     if (activeService) {
-      overlayManager.open("printServiceOverlay");
+      console.warn("Ignored window.print() because of a pending print job.");
+      return;
     }
-  });
+    ensureOverlay().then(function () {
+      if (activeService) {
+        overlayManager.open("printServiceOverlay");
+      }
+    });
 
-  try {
-    dispatchEvent("beforeprint");
-  } finally {
-    if (!activeService) {
-      console.error("Expected print service to be initialized.");
-      ensureOverlay().then(function () {
-        if (overlayManager.active === "printServiceOverlay") {
-          overlayManager.close("printServiceOverlay");
-        }
-      });
-      return; // eslint-disable-line no-unsafe-finally
+    try {
+      dispatchEvent("beforeprint");
+    } finally {
+      if (!activeService) {
+        console.error("Expected print service to be initialized.");
+        ensureOverlay().then(function () {
+          if (overlayManager.active === "printServiceOverlay") {
+            overlayManager.close("printServiceOverlay");
+          }
+        });
+        return; // eslint-disable-line no-unsafe-finally
+      }
+      const activeServiceOnEntry = activeService;
+      activeService
+        .renderPages()
+        .then(function () {
+          return activeServiceOnEntry.performPrint();
+        })
+        .catch(function () {
+          // Ignore any error messages.
+        })
+        .then(function () {
+          // aborts acts on the "active" print request, so we need to check
+          // whether the print request (activeServiceOnEntry) is still active.
+          // Without the check, an unrelated print request (created after aborting
+          // this print request while the pages were being generated) would be
+          // aborted.
+          if (activeServiceOnEntry.active) {
+            abort();
+          }
+        });
     }
-    const activeServiceOnEntry = activeService;
-    activeService
-      .renderPages()
-      .then(function () {
-        return activeServiceOnEntry.performPrint();
-      })
-      .catch(function () {
-        // Ignore any error messages.
-      })
-      .then(function () {
-        // aborts acts on the "active" print request, so we need to check
-        // whether the print request (activeServiceOnEntry) is still active.
-        // Without the check, an unrelated print request (created after aborting
-        // this print request while the pages were being generated) would be
-        // aborted.
-        if (activeServiceOnEntry.active) {
-          abort();
-        }
-      });
   }
+
+  Useall.validarPermissaoImprimir(doPrint);
 };
 
 function dispatchEvent(eventType) {

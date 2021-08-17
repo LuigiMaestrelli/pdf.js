@@ -249,6 +249,28 @@ class UseallInfra {
       callback(docUrl);
     }
   }
+
+  validarPermissaoImprimir(callback) {
+    if (!this.urlRecuperarPermissao) {
+      callback();
+      return;
+    }
+
+    const dto = {
+      Codigo: parseInt(this.codigoDocumento),
+    };
+
+    this.postRequest(
+      this.urlRecuperarPermissao,
+      dto,
+      () => {
+        callback(callback);
+      },
+      response => {
+        window.alert(response.Message);
+      }
+    );
+  }
 }
 
 export default new UseallInfra();
