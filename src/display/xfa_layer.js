@@ -13,6 +13,8 @@
  * limitations under the License.
  */
 
+import { XfaText } from "./xfa_text.js";
+
 class XfaLayer {
   static setupStorage(html, id, element, storage, intent) {
     const storedData = storage.getValue(id, { value: null });
@@ -40,7 +42,11 @@ class XfaLayer {
             break;
           }
           html.addEventListener("change", event => {
-            storage.setValue(id, { value: event.target.getAttribute("xfaOn") });
+            storage.setValue(id, {
+              value: event.target.checked
+                ? event.target.getAttribute("xfaOn")
+                : event.target.getAttribute("xfaOff"),
+            });
           });
         } else {
           if (storedData.value !== null) {
@@ -127,6 +133,9 @@ class XfaLayer {
     // Set defaults.
     rootDiv.setAttribute("class", "xfaLayer xfaFont");
 
+    // Text nodes used for the text highlighter.
+    const textDivs = [];
+
     while (stack.length > 0) {
       const [parent, i, html] = stack[stack.length - 1];
       if (i + 1 === parent.children.length) {
@@ -141,7 +150,9 @@ class XfaLayer {
 
       const { name } = child;
       if (name === "#text") {
-        html.appendChild(document.createTextNode(child.value));
+        const node = document.createTextNode(child.value);
+        textDivs.push(node);
+        html.appendChild(node);
         continue;
       }
 
@@ -160,7 +171,11 @@ class XfaLayer {
       if (child.children && child.children.length > 0) {
         stack.push([child, -1, childHtml]);
       } else if (child.value) {
-        childHtml.appendChild(document.createTextNode(child.value));
+        const node = document.createTextNode(child.value);
+        if (XfaText.shouldBuildText(name)) {
+          textDivs.push(node);
+        }
+        childHtml.appendChild(node);
       }
     }
 
@@ -185,6 +200,10 @@ class XfaLayer {
     )) {
       el.setAttribute("readOnly", true);
     }
+
+    return {
+      textDivs,
+    };
   }
 
   /**

@@ -33,6 +33,8 @@ import {
 import { AnnotationStorage } from "./annotation_storage.js";
 import { ColorConverters } from "../shared/scripting_utils.js";
 
+const DEFAULT_TAB_INDEX = 1000;
+
 /**
  * @typedef {Object} AnnotationElementParameters
  * @property {Object} data
@@ -44,7 +46,7 @@ import { ColorConverters } from "../shared/scripting_utils.js";
  * @property {AnnotationStorage} [annotationStorage]
  * @property {string} [imageResourcesPath] - Path for image resources, mainly
  *   for annotation icons. Include trailing slash.
- * @property {boolean} renderInteractiveForms
+ * @property {boolean} renderForms
  * @property {Object} svgFactory
  * @property {boolean} [enableScripting]
  * @property {boolean} [hasJSActions]
@@ -152,7 +154,7 @@ class AnnotationElement {
     this.linkService = parameters.linkService;
     this.downloadManager = parameters.downloadManager;
     this.imageResourcesPath = parameters.imageResourcesPath;
-    this.renderInteractiveForms = parameters.renderInteractiveForms;
+    this.renderForms = parameters.renderForms;
     this.svgFactory = parameters.svgFactory;
     this.annotationStorage = parameters.annotationStorage;
     this.enableScripting = parameters.enableScripting;
@@ -674,7 +676,7 @@ class WidgetAnnotationElement extends AnnotationElement {
 class TextWidgetAnnotationElement extends WidgetAnnotationElement {
   constructor(parameters) {
     const isRenderable =
-      parameters.renderInteractiveForms ||
+      parameters.renderForms ||
       (!parameters.data.hasAppearance && !!parameters.data.fieldValue);
     super(parameters, { isRenderable });
   }
@@ -698,7 +700,7 @@ class TextWidgetAnnotationElement extends WidgetAnnotationElement {
     this.container.className = "textWidgetAnnotation";
 
     let element = null;
-    if (this.renderInteractiveForms) {
+    if (this.renderForms) {
       // NOTE: We cannot set the values using `element.value` below, since it
       //       prevents the AnnotationLayer rasterizer in `test/driver.js`
       //       from parsing the elements correctly for the reference tests.
@@ -722,6 +724,7 @@ class TextWidgetAnnotationElement extends WidgetAnnotationElement {
         element.type = "text";
         element.setAttribute("value", textContent);
       }
+      element.tabIndex = DEFAULT_TAB_INDEX;
 
       elementData.userValue = textContent;
       element.setAttribute("id", id);
@@ -949,7 +952,7 @@ class TextWidgetAnnotationElement extends WidgetAnnotationElement {
 
 class CheckboxWidgetAnnotationElement extends WidgetAnnotationElement {
   constructor(parameters) {
-    super(parameters, { isRenderable: parameters.renderInteractiveForms });
+    super(parameters, { isRenderable: parameters.renderForms });
   }
 
   render() {
@@ -978,6 +981,7 @@ class CheckboxWidgetAnnotationElement extends WidgetAnnotationElement {
       element.setAttribute("checked", true);
     }
     element.setAttribute("id", id);
+    element.tabIndex = DEFAULT_TAB_INDEX;
 
     element.addEventListener("change", function (event) {
       const name = event.target.name;
@@ -1027,7 +1031,7 @@ class CheckboxWidgetAnnotationElement extends WidgetAnnotationElement {
 
 class RadioButtonWidgetAnnotationElement extends WidgetAnnotationElement {
   constructor(parameters) {
-    super(parameters, { isRenderable: parameters.renderInteractiveForms });
+    super(parameters, { isRenderable: parameters.renderForms });
   }
 
   render() {
@@ -1052,6 +1056,7 @@ class RadioButtonWidgetAnnotationElement extends WidgetAnnotationElement {
       element.setAttribute("checked", true);
     }
     element.setAttribute("id", id);
+    element.tabIndex = DEFAULT_TAB_INDEX;
 
     element.addEventListener("change", function (event) {
       const { target } = event;
@@ -1118,7 +1123,7 @@ class PushButtonWidgetAnnotationElement extends LinkAnnotationElement {
 
 class ChoiceWidgetAnnotationElement extends WidgetAnnotationElement {
   constructor(parameters) {
-    super(parameters, { isRenderable: parameters.renderInteractiveForms });
+    super(parameters, { isRenderable: parameters.renderForms });
   }
 
   render() {
@@ -1148,6 +1153,7 @@ class ChoiceWidgetAnnotationElement extends WidgetAnnotationElement {
     selectElement.disabled = this.data.readOnly;
     selectElement.name = this.data.fieldName;
     selectElement.setAttribute("id", id);
+    selectElement.tabIndex = DEFAULT_TAB_INDEX;
 
     selectElement.style.fontSize = `${fontSize}px`;
 
@@ -2027,7 +2033,7 @@ class FileAttachmentAnnotationElement extends AnnotationElement {
  * @property {DownloadManager} downloadManager
  * @property {string} [imageResourcesPath] - Path for image resources, mainly
  *   for annotation icons. Include trailing slash.
- * @property {boolean} renderInteractiveForms
+ * @property {boolean} renderForms
  * @property {boolean} [enableScripting] - Enable embedded script execution.
  * @property {boolean} [hasJSActions] - Some fields have JS actions.
  *   The default value is `false`.
@@ -2070,7 +2076,7 @@ class AnnotationLayer {
         linkService: parameters.linkService,
         downloadManager: parameters.downloadManager,
         imageResourcesPath: parameters.imageResourcesPath || "",
-        renderInteractiveForms: parameters.renderInteractiveForms !== false,
+        renderForms: parameters.renderForms !== false,
         svgFactory: new DOMSVGFactory(),
         annotationStorage:
           parameters.annotationStorage || new AnnotationStorage(),

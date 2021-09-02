@@ -18,6 +18,35 @@ import "./compatibility.js";
 const IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
 const FONT_IDENTITY_MATRIX = [0.001, 0, 0, 0.001, 0, 0];
 
+/**
+ * Refer to the `WorkerTransport.getRenderingIntent`-method in the API, to see
+ * how these flags are being used:
+ *  - ANY, DISPLAY, and PRINT are the normal rendering intents, note the
+ *    `PDFPageProxy.{render, getOperatorList, getAnnotations}`-methods.
+ *  - ANNOTATIONS_FORMS, ANNOTATIONS_STORAGE, ANNOTATIONS_DISABLE control which
+ *    annotations are rendered onto the canvas (i.e. by being included in the
+ *    operatorList), note the `PDFPageProxy.{render, getOperatorList}`-methods
+ *    and their `annotationMode`-option.
+ *  - OPLIST is used with the `PDFPageProxy.getOperatorList`-method, note the
+ *    `OperatorList`-constructor (on the worker-thread).
+ */
+const RenderingIntentFlag = {
+  ANY: 0x01,
+  DISPLAY: 0x02,
+  PRINT: 0x04,
+  ANNOTATIONS_FORMS: 0x10,
+  ANNOTATIONS_STORAGE: 0x20,
+  ANNOTATIONS_DISABLE: 0x40,
+  OPLIST: 0x100,
+};
+
+const AnnotationMode = {
+  DISABLE: 0,
+  ENABLE: 1,
+  ENABLE_FORMS: 2,
+  ENABLE_STORAGE: 3,
+};
+
 // Permission flags from Table 22, Section 7.6.3.2 of the PDF specification.
 const PermissionFlag = {
   PRINT: 0x04,
@@ -451,12 +480,12 @@ function shadow(obj, prop, value) {
  */
 const BaseException = (function BaseExceptionClosure() {
   // eslint-disable-next-line no-shadow
-  function BaseException(message) {
+  function BaseException(message, name) {
     if (this.constructor === BaseException) {
       unreachable("Cannot initialize BaseException.");
     }
     this.message = message;
-    this.name = this.constructor.name;
+    this.name = name;
   }
   BaseException.prototype = new Error();
   BaseException.constructor = BaseException;
@@ -466,25 +495,33 @@ const BaseException = (function BaseExceptionClosure() {
 
 class PasswordException extends BaseException {
   constructor(msg, code) {
-    super(msg);
+    super(msg, "PasswordException");
     this.code = code;
   }
 }
 
 class UnknownErrorException extends BaseException {
   constructor(msg, details) {
-    super(msg);
+    super(msg, "UnknownErrorException");
     this.details = details;
   }
 }
 
-class InvalidPDFException extends BaseException {}
+class InvalidPDFException extends BaseException {
+  constructor(msg) {
+    super(msg, "InvalidPDFException");
+  }
+}
 
-class MissingPDFException extends BaseException {}
+class MissingPDFException extends BaseException {
+  constructor(msg) {
+    super(msg, "MissingPDFException");
+  }
+}
 
 class UnexpectedResponseException extends BaseException {
   constructor(msg, status) {
-    super(msg);
+    super(msg, "UnexpectedResponseException");
     this.status = status;
   }
 }
@@ -492,12 +529,20 @@ class UnexpectedResponseException extends BaseException {
 /**
  * Error caused during parsing PDF data.
  */
-class FormatError extends BaseException {}
+class FormatError extends BaseException {
+  constructor(msg) {
+    super(msg, "FormatError");
+  }
+}
 
 /**
  * Error used to indicate task cancellation.
  */
-class AbortException extends BaseException {}
+class AbortException extends BaseException {
+  constructor(msg) {
+    super(msg, "AbortException");
+  }
+}
 
 const NullCharactersRegExp = /\x00/g;
 
@@ -991,6 +1036,7 @@ export {
   AnnotationFieldFlag,
   AnnotationFlag,
   AnnotationMarkedState,
+  AnnotationMode,
   AnnotationReplyType,
   AnnotationReviewState,
   AnnotationStateModelType,
@@ -1033,6 +1079,7 @@ export {
   PasswordResponses,
   PermissionFlag,
   removeNullCharacters,
+  RenderingIntentFlag,
   setVerbosityLevel,
   shadow,
   StreamType,

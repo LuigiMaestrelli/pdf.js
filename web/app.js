@@ -323,11 +323,11 @@ const PDFViewerApplication = {
    */
   async _parseHashParameters() {
     if (!AppOptions.get("pdfBugEnabled")) {
-      return undefined;
+      return;
     }
     const hash = document.location.hash.substring(1);
     if (!hash) {
-      return undefined;
+      return;
     }
     const params = parseQueryString(hash),
       waitOn = [];
@@ -377,7 +377,7 @@ const PDFViewerApplication = {
       AppOptions.set("fontExtraProperties", true);
 
       const enabled = params.get("pdfbug").split(",");
-      waitOn.push(loadAndEnablePDFBug(enabled));
+      waitOn.push(initPDFBug(enabled));
     }
     // It is not possible to change locale for the (various) extension builds.
     if (
@@ -389,11 +389,13 @@ const PDFViewerApplication = {
     }
 
     if (waitOn.length === 0) {
-      return undefined;
+      return;
     }
-    return Promise.all(waitOn).catch(reason => {
+    try {
+      await Promise.all(waitOn);
+    } catch (reason) {
       console.error(`_parseHashParameters: "${reason.message}".`);
-    });
+    }
   },
 
   /**
@@ -513,8 +515,8 @@ const PDFViewerApplication = {
       renderer: AppOptions.get("renderer"),
       l10n: this.l10n,
       textLayerMode: AppOptions.get("textLayerMode"),
+      annotationMode: AppOptions.get("annotationMode"),
       imageResourcesPath: AppOptions.get("imageResourcesPath"),
-      renderInteractiveForms: AppOptions.get("renderInteractiveForms"),
       enablePrintAutoRotate: AppOptions.get("enablePrintAutoRotate"),
       useOnlyCssZoom: AppOptions.get("useOnlyCssZoom"),
       maxCanvasPixels: AppOptions.get("maxCanvasPixels"),
@@ -677,21 +679,13 @@ const PDFViewerApplication = {
     if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
       return shadow(this, "supportsFullscreen", document.fullscreenEnabled);
     }
-    const doc = document.documentElement;
-    let support = !!(
-      doc.requestFullscreen ||
-      doc.mozRequestFullScreen ||
-      doc.webkitRequestFullScreen
+    return shadow(
+      this,
+      "supportsFullscreen",
+      document.fullscreenEnabled ||
+        document.mozFullScreenEnabled ||
+        document.webkitFullscreenEnabled
     );
-
-    if (
-      document.fullscreenEnabled === false ||
-      document.mozFullScreenEnabled === false ||
-      document.webkitFullscreenEnabled === false
-    ) {
-      support = false;
-    }
-    return shadow(this, "supportsFullscreen", support);
   },
 
   get supportsIntegratedFind() {
@@ -851,12 +845,8 @@ const PDFViewerApplication = {
     this.pdfAttachmentViewer.reset();
     this.pdfLayerViewer.reset();
 
-    if (this.pdfHistory) {
-      this.pdfHistory.reset();
-    }
-    if (this.findBar) {
-      this.findBar.reset();
-    }
+    this.pdfHistory?.reset();
+    this.findBar?.reset();
     this.toolbar.reset();
     this.secondaryToolbar.reset();
 
@@ -1553,7 +1543,7 @@ const PDFViewerApplication = {
       this.fallback(UNSUPPORTED_FEATURES.forms);
     } else if (
       (info.IsAcroFormPresent || info.IsXFAPresent) &&
-      !this.pdfViewer.renderInteractiveForms
+      !this.pdfViewer.renderForms
     ) {
       console.warn("Warning: Interactive form support is not enabled");
       this.fallback(UNSUPPORTED_FEATURES.forms);
@@ -1848,9 +1838,7 @@ const PDFViewerApplication = {
       this.printService.destroy();
       this.printService = null;
 
-      if (this.pdfDocument) {
-        this.pdfDocument.annotationStorage.resetModified();
-      }
+      this.pdfDocument?.annotationStorage.resetModified();
     }
     this.forceRendering();
   },
@@ -1862,10 +1850,7 @@ const PDFViewerApplication = {
   },
 
   requestPresentationMode() {
-    if (!this.pdfPresentationMode) {
-      return;
-    }
-    this.pdfPresentationMode.request();
+    this.pdfPresentationMode?.request();
   },
 
   triggerPrinting() {
@@ -2137,17 +2122,15 @@ async function loadFakeWorker() {
   }
   if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("PRODUCTION")) {
     window.pdfjsWorker = await import("pdfjs/core/worker.js");
-    return undefined;
+    return;
   }
-  return loadScript(PDFWorker.getWorkerSrc());
+  await loadScript(PDFWorker.workerSrc);
 }
 
-function loadAndEnablePDFBug(enabledTabs) {
-  const appConfig = PDFViewerApplication.appConfig;
-  return loadScript(appConfig.debuggerScriptPath).then(function () {
-    PDFBug.enable(enabledTabs);
-    PDFBug.init({ OPS }, appConfig.mainContainer);
-  });
+async function initPDFBug(enabledTabs) {
+  const { debuggerScriptPath, mainContainer } = PDFViewerApplication.appConfig;
+  await loadScript(debuggerScriptPath);
+  PDFBug.init({ OPS }, mainContainer, enabledTabs);
 }
 
 function reportPageStatsPDFBug({ pageNumber }) {

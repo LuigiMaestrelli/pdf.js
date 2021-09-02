@@ -19,6 +19,7 @@
 
 import {
   AbortException,
+  AnnotationMode,
   assert,
   createPromiseCapability,
   getVerbosityLevel,
@@ -28,6 +29,7 @@ import {
   isSameOrigin,
   MissingPDFException,
   PasswordException,
+  RenderingIntentFlag,
   setVerbosityLevel,
   shadow,
   stringToBytes,
@@ -61,6 +63,7 @@ import { MessageHandler } from "../shared/message_handler.js";
 import { Metadata } from "./metadata.js";
 import { OptionalContentConfig } from "./optional_content_config.js";
 import { PDFDataTransportStream } from "./transport_stream.js";
+import { XfaText } from "./xfa_text.js";
 
 const DEFAULT_RANGE_CHUNK_SIZE = 65536; // 2^16 = 65536
 const RENDERING_CANCELLED_TIMEOUT = 100; // ms
@@ -460,13 +463,13 @@ function getDocument(src) {
  * @param {Object} source
  * @param {PDFDataRangeTransport} pdfDataRangeTransport
  * @param {string} docId - Unique document ID, used in `MessageHandler`.
- * @returns {Promise} A promise that is resolved when the worker ID of the
- *   `MessageHandler` is known.
+ * @returns {Promise<string>} A promise that is resolved when the worker ID of
+ *   the `MessageHandler` is known.
  * @private
  */
-function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
+async function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
   if (worker.destroyed) {
-    return Promise.reject(new Error("Worker was destroyed"));
+    throw new Error("Worker was destroyed");
   }
 
   if (pdfDataRangeTransport) {
@@ -476,8 +479,9 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
     source.contentDispositionFilename =
       pdfDataRangeTransport.contentDispositionFilename;
   }
-  return worker.messageHandler
-    .sendWithPromise("GetDocRequest", {
+  const workerId = await worker.messageHandler.sendWithPromise(
+    "GetDocRequest",
+    {
       docId,
       apiVersion:
         typeof PDFJSDev !== "undefined" && !PDFJSDev.test("TESTING")
@@ -505,13 +509,13 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
       standardFontDataUrl: source.useWorkerFetch
         ? source.standardFontDataUrl
         : null,
-    })
-    .then(function (workerId) {
-      if (worker.destroyed) {
-        throw new Error("Worker was destroyed");
-      }
-      return workerId;
-    });
+    }
+  );
+
+  if (worker.destroyed) {
+    throw new Error("Worker was destroyed");
+  }
+  return workerId;
 }
 
 /**
@@ -584,19 +588,15 @@ class PDFDocumentLoadingTask {
    * @returns {Promise<void>} A promise that is resolved when destruction is
    *   completed.
    */
-  destroy() {
+  async destroy() {
     this.destroyed = true;
+    await this._transport?.destroy();
 
-    const transportDestroyed = !this._transport
-      ? Promise.resolve()
-      : this._transport.destroy();
-    return transportDestroyed.then(() => {
-      this._transport = null;
-      if (this._worker) {
-        this._worker.destroy();
-        this._worker = null;
-      }
-    });
+    this._transport = null;
+    if (this._worker) {
+      this._worker.destroy();
+      this._worker = null;
+    }
   }
 }
 
@@ -1120,8 +1120,8 @@ class PDFDocumentProxy {
  *
  * @typedef {Object} GetAnnotationsParameters
  * @property {string} [intent] - Determines the annotations that are fetched,
- *   can be either 'display' (viewable annotations) or 'print' (printable
- *   annotations). If the parameter is omitted, all annotations are fetched.
+ *   can be 'display' (viewable annotations), 'print' (printable annotations),
+ *   or 'any' (all annotations). The default value is 'display'.
  */
 
 /**
@@ -1131,11 +1131,20 @@ class PDFDocumentProxy {
  * @property {Object} canvasContext - A 2D context of a DOM Canvas object.
  * @property {PageViewport} viewport - Rendering viewport obtained by calling
  *   the `PDFPageProxy.getViewport` method.
- * @property {string} [intent] - Rendering intent, can be 'display' or 'print'.
- *   The default value is 'display'.
- * @property {boolean} [renderInteractiveForms] - Whether or not interactive
- *   form elements are rendered in the display layer. If so, we do not render
- *   them on the canvas as well. The default value is `false`.
+ * @property {string} [intent] - Rendering intent, can be 'display', 'print',
+ *   or 'any'. The default value is 'display'.
+ * @property {number} [annotationMode] Controls which annotations are rendered
+ *   onto the canvas, for annotations with appearance-data; the values from
+ *   {@link AnnotationMode} should be used. The following values are supported:
+ *    - `AnnotationMode.DISABLE`, which disables all annotations.
+ *    - `AnnotationMode.ENABLE`, which includes all possible annotations (thus
+ *      it also depends on the `intent`-option, see above).
+ *    - `AnnotationMode.ENABLE_FORMS`, which excludes annotations that contain
+ *      interactive form elements (those will be rendered in the display layer).
+ *    - `AnnotationMode.ENABLE_STORAGE`, which includes all possible annotations
+ *      (as above) but where interactive form elements are updated with data
+ *      from the {@link AnnotationStorage}-instance; useful e.g. for printing.
+ *   The default value is `AnnotationMode.ENABLE`.
  * @property {Array<any>} [transform] - Additional transform, applied just
  *   before viewport transform.
  * @property {Object} [imageLayer] - An object that has `beginLayout`,
@@ -1147,9 +1156,6 @@ class PDFDocumentProxy {
  *   <color> value, a `CanvasGradient` object (a linear or radial gradient) or
  *   a `CanvasPattern` object (a repetitive image). The default value is
  *   'rgb(255,255,255)'.
- * @property {boolean} [includeAnnotationStorage] - Render stored interactive
- *   form element data, from the {@link AnnotationStorage}-instance, onto the
- *   canvas itself; useful e.g. for printing. The default value is `false`.
  * @property {Promise<OptionalContentConfig>} [optionalContentConfigPromise] -
  *   A promise that should resolve with an {@link OptionalContentConfig}
  *   created from `PDFDocumentProxy.getOptionalContentConfig`. If `null`,
@@ -1161,8 +1167,20 @@ class PDFDocumentProxy {
  * Page getOperatorList parameters.
  *
  * @typedef {Object} GetOperatorListParameters
- * @property {string} [intent] - Rendering intent, can be 'display' or 'print'.
- *   The default value is 'display'.
+ * @property {string} [intent] - Rendering intent, can be 'display', 'print',
+ *   or 'any'. The default value is 'display'.
+ * @property {number} [annotationMode] Controls which annotations are included
+ *   in the operatorList, for annotations with appearance-data; the values from
+ *   {@link AnnotationMode} should be used. The following values are supported:
+ *    - `AnnotationMode.DISABLE`, which disables all annotations.
+ *    - `AnnotationMode.ENABLE`, which includes all possible annotations (thus
+ *      it also depends on the `intent`-option, see above).
+ *    - `AnnotationMode.ENABLE_FORMS`, which excludes annotations that contain
+ *      interactive form elements (those will be rendered in the display layer).
+ *    - `AnnotationMode.ENABLE_STORAGE`, which includes all possible annotations
+ *      (as above) but where interactive form elements are updated with data
+ *      from the {@link AnnotationStorage}-instance; useful e.g. for printing.
+ *   The default value is `AnnotationMode.ENABLE`.
  */
 
 /**
@@ -1210,6 +1228,7 @@ class PDFPageProxy {
     this.cleanupAfterRender = false;
     this.pendingCleanup = false;
     this._intentStates = new Map();
+    this._annotationPromises = new Map();
     this.destroyed = false;
   }
 
@@ -1276,21 +1295,18 @@ class PDFPageProxy {
    * @returns {Promise<Array<any>>} A promise that is resolved with an
    *   {Array} of the annotation objects.
    */
-  getAnnotations({ intent = null } = {}) {
-    const renderingIntent =
-      intent === "display" || intent === "print" ? intent : null;
+  getAnnotations({ intent = "display" } = {}) {
+    const intentArgs = this._transport.getRenderingIntent(intent);
 
-    if (
-      !this._annotationsPromise ||
-      this._annotationsIntent !== renderingIntent
-    ) {
-      this._annotationsPromise = this._transport.getAnnotations(
+    let promise = this._annotationPromises.get(intentArgs.cacheKey);
+    if (!promise) {
+      promise = this._transport.getAnnotations(
         this._pageIndex,
-        renderingIntent
+        intentArgs.renderingIntent
       );
-      this._annotationsIntent = renderingIntent;
+      this._annotationPromises.set(intentArgs.cacheKey, promise);
     }
-    return this._annotationsPromise;
+    return promise;
   }
 
   /**
@@ -1324,19 +1340,48 @@ class PDFPageProxy {
     canvasContext,
     viewport,
     intent = "display",
-    renderInteractiveForms = false,
+    annotationMode = AnnotationMode.ENABLE,
     transform = null,
     imageLayer = null,
     canvasFactory = null,
     background = null,
-    includeAnnotationStorage = false,
     optionalContentConfigPromise = null,
   }) {
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
+      if (arguments[0]?.renderInteractiveForms !== undefined) {
+        deprecated(
+          "render no longer accepts the `renderInteractiveForms`-option, " +
+            "please use the `annotationMode`-option instead."
+        );
+        if (
+          arguments[0].renderInteractiveForms === true &&
+          annotationMode === AnnotationMode.ENABLE
+        ) {
+          annotationMode = AnnotationMode.ENABLE_FORMS;
+        }
+      }
+      if (arguments[0]?.includeAnnotationStorage !== undefined) {
+        deprecated(
+          "render no longer accepts the `includeAnnotationStorage`-option, " +
+            "please use the `annotationMode`-option instead."
+        );
+        if (
+          arguments[0].includeAnnotationStorage === true &&
+          annotationMode === AnnotationMode.ENABLE
+        ) {
+          annotationMode = AnnotationMode.ENABLE_STORAGE;
+        }
+      }
+    }
+
     if (this._stats) {
       this._stats.time("Overall");
     }
 
-    const renderingIntent = intent === "print" ? "print" : "display";
+    const intentArgs = this._transport.getRenderingIntent(
+      intent,
+      annotationMode
+    );
     // If there was a pending destroy, cancel it so no cleanup happens during
     // this call to render.
     this.pendingCleanup = false;
@@ -1345,10 +1390,10 @@ class PDFPageProxy {
       optionalContentConfigPromise = this._transport.getOptionalContentConfig();
     }
 
-    let intentState = this._intentStates.get(renderingIntent);
+    let intentState = this._intentStates.get(intentArgs.cacheKey);
     if (!intentState) {
       intentState = Object.create(null);
-      this._intentStates.set(renderingIntent, intentState);
+      this._intentStates.set(intentArgs.cacheKey, intentState);
     }
 
     // Ensure that a pending `streamReader` cancel timeout is always aborted.
@@ -1360,9 +1405,9 @@ class PDFPageProxy {
     const canvasFactoryInstance =
       canvasFactory ||
       new DefaultCanvasFactory({ ownerDocument: this._ownerDocument });
-    const annotationStorage = includeAnnotationStorage
-      ? this._transport.annotationStorage.serializable
-      : null;
+    const intentPrint = !!(
+      intentArgs.renderingIntent & RenderingIntentFlag.PRINT
+    );
 
     // If there's no displayReadyCapability yet, then the operatorList
     // was never requested before. Make the request and create the promise.
@@ -1377,12 +1422,7 @@ class PDFPageProxy {
       if (this._stats) {
         this._stats.time("Page Request");
       }
-      this._pumpOperatorList({
-        pageIndex: this._pageIndex,
-        intent: renderingIntent,
-        renderInteractiveForms: renderInteractiveForms === true,
-        annotationStorage,
-      });
+      this._pumpOperatorList(intentArgs);
     }
 
     const complete = error => {
@@ -1390,7 +1430,7 @@ class PDFPageProxy {
 
       // Attempt to reduce memory usage during *printing*, by always running
       // cleanup once rendering has finished (regardless of cleanupAfterRender).
-      if (this.cleanupAfterRender || renderingIntent === "print") {
+      if (this.cleanupAfterRender || intentPrint) {
         this.pendingCleanup = true;
       }
       this._tryCleanup();
@@ -1400,7 +1440,7 @@ class PDFPageProxy {
 
         this._abortOperatorList({
           intentState,
-          reason: error,
+          reason: error instanceof Error ? error : new Error(error),
         });
       } else {
         internalRenderTask.capability.resolve();
@@ -1426,7 +1466,7 @@ class PDFPageProxy {
       operatorList: intentState.operatorList,
       pageIndex: this._pageIndex,
       canvasFactory: canvasFactoryInstance,
-      useRequestAnimationFrame: renderingIntent !== "print",
+      useRequestAnimationFrame: !intentPrint,
       pdfBug: this._pdfBug,
     });
 
@@ -1462,7 +1502,10 @@ class PDFPageProxy {
    * @returns {Promise<PDFOperatorList>} A promise resolved with an
    *   {@link PDFOperatorList} object that represents the page's operator list.
    */
-  getOperatorList({ intent = "display" } = {}) {
+  getOperatorList({
+    intent = "display",
+    annotationMode = AnnotationMode.ENABLE,
+  } = {}) {
     function operatorListChanged() {
       if (intentState.operatorList.lastChunk) {
         intentState.opListReadCapability.resolve(intentState.operatorList);
@@ -1471,13 +1514,15 @@ class PDFPageProxy {
       }
     }
 
-    const renderingIntent = `oplist-${
-      intent === "print" ? "print" : "display"
-    }`;
-    let intentState = this._intentStates.get(renderingIntent);
+    const intentArgs = this._transport.getRenderingIntent(
+      intent,
+      annotationMode,
+      /* isOpList = */ true
+    );
+    let intentState = this._intentStates.get(intentArgs.cacheKey);
     if (!intentState) {
       intentState = Object.create(null);
-      this._intentStates.set(renderingIntent, intentState);
+      this._intentStates.set(intentArgs.cacheKey, intentState);
     }
     let opListTask;
 
@@ -1495,10 +1540,7 @@ class PDFPageProxy {
       if (this._stats) {
         this._stats.time("Page Request");
       }
-      this._pumpOperatorList({
-        pageIndex: this._pageIndex,
-        intent: renderingIntent,
-      });
+      this._pumpOperatorList(intentArgs);
     }
     return intentState.opListReadCapability.promise;
   }
@@ -1537,6 +1579,13 @@ class PDFPageProxy {
    *   {@link TextContent} object that represents the page's text content.
    */
   getTextContent(params = {}) {
+    if (this._transport._htmlForXfa) {
+      // TODO: We need to revisit this once the XFA foreground patch lands and
+      // only do this for non-foreground XFA.
+      return this.getXfa().then(xfa => {
+        return XfaText.textContent(xfa);
+      });
+    }
     const readableStream = this.streamTextContent(params);
 
     return new Promise(function (resolve, reject) {
@@ -1581,14 +1630,14 @@ class PDFPageProxy {
     this._transport.pageCache[this._pageIndex] = null;
 
     const waitOn = [];
-    for (const [intent, intentState] of this._intentStates) {
+    for (const intentState of this._intentStates.values()) {
       this._abortOperatorList({
         intentState,
         reason: new Error("Page was destroyed."),
         force: true,
       });
 
-      if (intent.startsWith("oplist-")) {
+      if (intentState.opListReadCapability) {
         // Avoid errors below, since the renderTasks are just stubs.
         continue;
       }
@@ -1598,7 +1647,7 @@ class PDFPageProxy {
       }
     }
     this.objs.clear();
-    this._annotationsPromise = null;
+    this._annotationPromises.clear();
     this._jsActionsPromise = null;
     this._structTreePromise = null;
     this.pendingCleanup = false;
@@ -1633,7 +1682,7 @@ class PDFPageProxy {
 
     this._intentStates.clear();
     this.objs.clear();
-    this._annotationsPromise = null;
+    this._annotationPromises.clear();
     this._jsActionsPromise = null;
     this._structTreePromise = null;
     if (resetStats && this._stats) {
@@ -1646,8 +1695,8 @@ class PDFPageProxy {
   /**
    * @private
    */
-  _startRenderPage(transparency, intent) {
-    const intentState = this._intentStates.get(intent);
+  _startRenderPage(transparency, cacheKey) {
+    const intentState = this._intentStates.get(cacheKey);
     if (!intentState) {
       return; // Rendering was cancelled.
     }
@@ -1685,19 +1734,32 @@ class PDFPageProxy {
   /**
    * @private
    */
-  _pumpOperatorList(args) {
-    assert(
-      args.intent,
-      'PDFPageProxy._pumpOperatorList: Expected "intent" argument.'
-    );
+  _pumpOperatorList({ renderingIntent, cacheKey }) {
+    if (
+      typeof PDFJSDev === "undefined" ||
+      PDFJSDev.test("!PRODUCTION || TESTING")
+    ) {
+      assert(
+        Number.isInteger(renderingIntent) && renderingIntent > 0,
+        '_pumpOperatorList: Expected valid "renderingIntent" argument.'
+      );
+    }
 
     const readableStream = this._transport.messageHandler.sendWithStream(
       "GetOperatorList",
-      args
+      {
+        pageIndex: this._pageIndex,
+        intent: renderingIntent,
+        cacheKey,
+        annotationStorage:
+          renderingIntent & RenderingIntentFlag.ANNOTATIONS_STORAGE
+            ? this._transport.annotationStorage.serializable
+            : null,
+      }
     );
     const reader = readableStream.getReader();
 
-    const intentState = this._intentStates.get(args.intent);
+    const intentState = this._intentStates.get(cacheKey);
     intentState.streamReader = reader;
 
     const pump = () => {
@@ -1746,11 +1808,15 @@ class PDFPageProxy {
    * @private
    */
   _abortOperatorList({ intentState, reason, force = false }) {
-    assert(
-      reason instanceof Error ||
-        (typeof reason === "object" && reason !== null),
-      'PDFPageProxy._abortOperatorList: Expected "reason" argument.'
-    );
+    if (
+      typeof PDFJSDev === "undefined" ||
+      PDFJSDev.test("!PRODUCTION || TESTING")
+    ) {
+      assert(
+        reason instanceof Error,
+        '_abortOperatorList: Expected valid "reason" argument.'
+      );
+    }
 
     if (!intentState.streamReader) {
       return;
@@ -1773,7 +1839,7 @@ class PDFPageProxy {
       }
     }
     intentState.streamReader
-      .cancel(new AbortException(reason?.message))
+      .cancel(new AbortException(reason.message))
       .catch(() => {
         // Avoid "Uncaught promise" messages in the console.
       });
@@ -1784,9 +1850,9 @@ class PDFPageProxy {
     }
     // Remove the current `intentState`, since a cancelled `getOperatorList`
     // call on the worker-thread cannot be re-started...
-    for (const [intent, curIntentState] of this._intentStates) {
+    for (const [curCacheKey, curIntentState] of this._intentStates) {
       if (curIntentState === intentState) {
-        this._intentStates.delete(intent);
+        this._intentStates.delete(curCacheKey);
         break;
       }
     }
@@ -1913,48 +1979,319 @@ class LoopbackPort {
  *   the constants from {@link VerbosityLevel} should be used.
  */
 
-/** @type {any} */
-const PDFWorker = (function PDFWorkerClosure() {
-  const pdfWorkerPorts = new WeakMap();
-  let isWorkerDisabled = false;
-  let fallbackWorkerSrc;
-  let nextFakeWorkerId = 0;
-  let fakeWorkerCapability;
+const PDFWorkerUtil = {
+  isWorkerDisabled: false,
+  fallbackWorkerSrc: null,
+  fakeWorkerId: 0,
+};
+if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
+  // eslint-disable-next-line no-undef
+  if (isNodeJS && typeof __non_webpack_require__ === "function") {
+    // Workers aren't supported in Node.js, force-disabling them there.
+    PDFWorkerUtil.isWorkerDisabled = true;
 
-  if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
-    // eslint-disable-next-line no-undef
-    if (isNodeJS && typeof __non_webpack_require__ === "function") {
-      // Workers aren't supported in Node.js, force-disabling them there.
-      isWorkerDisabled = true;
-
-      fallbackWorkerSrc = PDFJSDev.test("LIB")
-        ? "../pdf.worker.js"
-        : "./pdf.worker.js";
-    } else if (typeof document === "object") {
-      const pdfjsFilePath = document?.currentScript?.src;
-      if (pdfjsFilePath) {
-        fallbackWorkerSrc = pdfjsFilePath.replace(
-          /(\.(?:min\.)?js)(\?.*)?$/i,
-          ".worker$1$2"
-        );
-      }
+    PDFWorkerUtil.fallbackWorkerSrc = PDFJSDev.test("LIB")
+      ? "../pdf.worker.js"
+      : "./pdf.worker.js";
+  } else if (typeof document === "object") {
+    const pdfjsFilePath = document?.currentScript?.src;
+    if (pdfjsFilePath) {
+      PDFWorkerUtil.fallbackWorkerSrc = pdfjsFilePath.replace(
+        /(\.(?:min\.)?js)(\?.*)?$/i,
+        ".worker$1$2"
+      );
     }
   }
 
-  function getWorkerSrc() {
+  PDFWorkerUtil.createCDNWrapper = function (url) {
+    // We will rely on blob URL's property to specify origin.
+    // We want this function to fail in case if createObjectURL or Blob do not
+    // exist or fail for some reason -- our Worker creation will fail anyway.
+    const wrapper = `importScripts("${url}");`;
+    return URL.createObjectURL(new Blob([wrapper]));
+  };
+}
+
+/**
+ * PDF.js web worker abstraction that controls the instantiation of PDF
+ * documents. Message handlers are used to pass information from the main
+ * thread to the worker thread and vice versa. If the creation of a web
+ * worker is not possible, a "fake" worker will be used instead.
+ *
+ * @param {PDFWorkerParameters} params - The worker initialization parameters.
+ */
+class PDFWorker {
+  static get _workerPorts() {
+    return shadow(this, "_workerPorts", new WeakMap());
+  }
+
+  constructor({
+    name = null,
+    port = null,
+    verbosity = getVerbosityLevel(),
+  } = {}) {
+    if (port && PDFWorker._workerPorts.has(port)) {
+      throw new Error("Cannot use more than one PDFWorker per port.");
+    }
+
+    this.name = name;
+    this.destroyed = false;
+    this.postMessageTransfers = true;
+    this.verbosity = verbosity;
+
+    this._readyCapability = createPromiseCapability();
+    this._port = null;
+    this._webWorker = null;
+    this._messageHandler = null;
+
+    if (port) {
+      PDFWorker._workerPorts.set(port, this);
+      this._initializeFromPort(port);
+      return;
+    }
+    this._initialize();
+  }
+
+  /**
+   * Promise for worker initialization completion.
+   * @type {Promise<void>}
+   */
+  get promise() {
+    return this._readyCapability.promise;
+  }
+
+  /**
+   * The current `workerPort`, when it exists.
+   * @type {Worker}
+   */
+  get port() {
+    return this._port;
+  }
+
+  /**
+   * The current MessageHandler-instance.
+   * @type {MessageHandler}
+   */
+  get messageHandler() {
+    return this._messageHandler;
+  }
+
+  _initializeFromPort(port) {
+    this._port = port;
+    this._messageHandler = new MessageHandler("main", "worker", port);
+    this._messageHandler.on("ready", function () {
+      // Ignoring "ready" event -- MessageHandler should already be initialized
+      // and ready to accept messages.
+    });
+    this._readyCapability.resolve();
+  }
+
+  _initialize() {
+    // If worker support isn't disabled explicit and the browser has worker
+    // support, create a new web worker and test if it/the browser fulfills
+    // all requirements to run parts of pdf.js in a web worker.
+    // Right now, the requirement is, that an Uint8Array is still an
+    // Uint8Array as it arrives on the worker. (Chrome added this with v.15.)
+    if (
+      typeof Worker !== "undefined" &&
+      !PDFWorkerUtil.isWorkerDisabled &&
+      !PDFWorker._mainThreadWorkerMessageHandler
+    ) {
+      let workerSrc = PDFWorker.workerSrc;
+
+      try {
+        // Wraps workerSrc path into blob URL, if the former does not belong
+        // to the same origin.
+        if (
+          typeof PDFJSDev !== "undefined" &&
+          PDFJSDev.test("GENERIC") &&
+          !isSameOrigin(window.location.href, workerSrc)
+        ) {
+          workerSrc = PDFWorkerUtil.createCDNWrapper(
+            new URL(workerSrc, window.location).href
+          );
+        }
+
+        // Some versions of FF can't create a worker on localhost, see:
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=683280
+        const worker = new Worker(workerSrc);
+        const messageHandler = new MessageHandler("main", "worker", worker);
+        const terminateEarly = () => {
+          worker.removeEventListener("error", onWorkerError);
+          messageHandler.destroy();
+          worker.terminate();
+          if (this.destroyed) {
+            this._readyCapability.reject(new Error("Worker was destroyed"));
+          } else {
+            // Fall back to fake worker if the termination is caused by an
+            // error (e.g. NetworkError / SecurityError).
+            this._setupFakeWorker();
+          }
+        };
+
+        const onWorkerError = () => {
+          if (!this._webWorker) {
+            // Worker failed to initialize due to an error. Clean up and fall
+            // back to the fake worker.
+            terminateEarly();
+          }
+        };
+        worker.addEventListener("error", onWorkerError);
+
+        messageHandler.on("test", data => {
+          worker.removeEventListener("error", onWorkerError);
+          if (this.destroyed) {
+            terminateEarly();
+            return; // worker was destroyed
+          }
+          if (data) {
+            // supportTypedArray
+            this._messageHandler = messageHandler;
+            this._port = worker;
+            this._webWorker = worker;
+            if (!data.supportTransfers) {
+              this.postMessageTransfers = false;
+            }
+            this._readyCapability.resolve();
+            // Send global setting, e.g. verbosity level.
+            messageHandler.send("configure", {
+              verbosity: this.verbosity,
+            });
+          } else {
+            this._setupFakeWorker();
+            messageHandler.destroy();
+            worker.terminate();
+          }
+        });
+
+        messageHandler.on("ready", data => {
+          worker.removeEventListener("error", onWorkerError);
+          if (this.destroyed) {
+            terminateEarly();
+            return; // worker was destroyed
+          }
+          try {
+            sendTest();
+          } catch (e) {
+            // We need fallback to a faked worker.
+            this._setupFakeWorker();
+          }
+        });
+
+        const sendTest = () => {
+          const testObj = new Uint8Array([this.postMessageTransfers ? 255 : 0]);
+          // Some versions of Opera throw a DATA_CLONE_ERR on serializing the
+          // typed array. Also, checking if we can use transfers.
+          try {
+            messageHandler.send("test", testObj, [testObj.buffer]);
+          } catch (ex) {
+            warn("Cannot use postMessage transfers.");
+            testObj[0] = 0;
+            messageHandler.send("test", testObj);
+          }
+        };
+
+        // It might take time for the worker to initialize. We will try to send
+        // the "test" message immediately, and once the "ready" message arrives.
+        // The worker shall process only the first received "test" message.
+        sendTest();
+        return;
+      } catch (e) {
+        info("The worker has been disabled.");
+      }
+    }
+    // Either workers are disabled, not supported or have thrown an exception.
+    // Thus, we fallback to a faked worker.
+    this._setupFakeWorker();
+  }
+
+  _setupFakeWorker() {
+    if (!PDFWorkerUtil.isWorkerDisabled) {
+      warn("Setting up fake worker.");
+      PDFWorkerUtil.isWorkerDisabled = true;
+    }
+
+    PDFWorker._setupFakeWorkerGlobal
+      .then(WorkerMessageHandler => {
+        if (this.destroyed) {
+          this._readyCapability.reject(new Error("Worker was destroyed"));
+          return;
+        }
+        const port = new LoopbackPort();
+        this._port = port;
+
+        // All fake workers use the same port, making id unique.
+        const id = `fake${PDFWorkerUtil.fakeWorkerId++}`;
+
+        // If the main thread is our worker, setup the handling for the
+        // messages -- the main thread sends to it self.
+        const workerHandler = new MessageHandler(id + "_worker", id, port);
+        WorkerMessageHandler.setup(workerHandler, port);
+
+        const messageHandler = new MessageHandler(id, id + "_worker", port);
+        this._messageHandler = messageHandler;
+        this._readyCapability.resolve();
+        // Send global setting, e.g. verbosity level.
+        messageHandler.send("configure", {
+          verbosity: this.verbosity,
+        });
+      })
+      .catch(reason => {
+        this._readyCapability.reject(
+          new Error(`Setting up fake worker failed: "${reason.message}".`)
+        );
+      });
+  }
+
+  /**
+   * Destroys the worker instance.
+   */
+  destroy() {
+    this.destroyed = true;
+    if (this._webWorker) {
+      // We need to terminate only web worker created resource.
+      this._webWorker.terminate();
+      this._webWorker = null;
+    }
+    PDFWorker._workerPorts.delete(this._port);
+    this._port = null;
+    if (this._messageHandler) {
+      this._messageHandler.destroy();
+      this._messageHandler = null;
+    }
+  }
+
+  /**
+   * @param {PDFWorkerParameters} params - The worker initialization parameters.
+   */
+  static fromPort(params) {
+    if (!params?.port) {
+      throw new Error("PDFWorker.fromPort - invalid method signature.");
+    }
+    if (this._workerPorts.has(params.port)) {
+      return this._workerPorts.get(params.port);
+    }
+    return new PDFWorker(params);
+  }
+
+  /**
+   * The current `workerSrc`, when it exists.
+   * @type {string}
+   */
+  static get workerSrc() {
     if (GlobalWorkerOptions.workerSrc) {
       return GlobalWorkerOptions.workerSrc;
     }
-    if (typeof fallbackWorkerSrc !== "undefined") {
+    if (PDFWorkerUtil.fallbackWorkerSrc !== null) {
       if (!isNodeJS) {
         deprecated('No "GlobalWorkerOptions.workerSrc" specified.');
       }
-      return fallbackWorkerSrc;
+      return PDFWorkerUtil.fallbackWorkerSrc;
     }
     throw new Error('No "GlobalWorkerOptions.workerSrc" specified.');
   }
 
-  function getMainThreadWorkerMessageHandler() {
+  static get _mainThreadWorkerMessageHandler() {
     try {
       return globalThis.pdfjsWorker?.WorkerMessageHandler || null;
     } catch (ex) {
@@ -1962,15 +2299,10 @@ const PDFWorker = (function PDFWorkerClosure() {
     }
   }
 
-  // Loads worker code into main-thread.
-  function setupFakeWorkerGlobal() {
-    if (fakeWorkerCapability) {
-      return fakeWorkerCapability.promise;
-    }
-    fakeWorkerCapability = createPromiseCapability();
-
-    const loader = async function () {
-      const mainWorkerMessageHandler = getMainThreadWorkerMessageHandler();
+  // Loads worker code into the main-thread.
+  static get _setupFakeWorkerGlobal() {
+    const loader = async () => {
+      const mainWorkerMessageHandler = this._mainThreadWorkerMessageHandler;
 
       if (mainWorkerMessageHandler) {
         // The worker was already loaded using e.g. a `<script>` tag.
@@ -1999,283 +2331,24 @@ const PDFWorker = (function PDFWorkerClosure() {
         // the Webpack warnings instead (telling users to ignore them).
         //
         // eslint-disable-next-line no-eval
-        const worker = eval("require")(getWorkerSrc());
+        const worker = eval("require")(this.workerSrc);
         return worker.WorkerMessageHandler;
       }
-      await loadScript(getWorkerSrc());
+      await loadScript(this.workerSrc);
       return window.pdfjsWorker.WorkerMessageHandler;
     };
-    loader().then(fakeWorkerCapability.resolve, fakeWorkerCapability.reject);
 
-    return fakeWorkerCapability.promise;
+    return shadow(this, "_setupFakeWorkerGlobal", loader());
   }
-
-  function createCDNWrapper(url) {
-    // We will rely on blob URL's property to specify origin.
-    // We want this function to fail in case if createObjectURL or Blob do not
-    // exist or fail for some reason -- our Worker creation will fail anyway.
-    const wrapper = "importScripts('" + url + "');";
-    return URL.createObjectURL(new Blob([wrapper]));
-  }
-
-  /**
-   * PDF.js web worker abstraction that controls the instantiation of PDF
-   * documents. Message handlers are used to pass information from the main
-   * thread to the worker thread and vice versa. If the creation of a web
-   * worker is not possible, a "fake" worker will be used instead.
-   */
-  // eslint-disable-next-line no-shadow
-  class PDFWorker {
-    /**
-     * @param {PDFWorkerParameters} params - Worker initialization parameters.
-     */
-    constructor({
-      name = null,
-      port = null,
-      verbosity = getVerbosityLevel(),
-    } = {}) {
-      if (port && pdfWorkerPorts.has(port)) {
-        throw new Error("Cannot use more than one PDFWorker per port");
-      }
-
-      this.name = name;
-      this.destroyed = false;
-      this.postMessageTransfers = true;
-      this.verbosity = verbosity;
-
-      this._readyCapability = createPromiseCapability();
-      this._port = null;
-      this._webWorker = null;
-      this._messageHandler = null;
-
-      if (port) {
-        pdfWorkerPorts.set(port, this);
-        this._initializeFromPort(port);
-        return;
-      }
-      this._initialize();
-    }
-
-    get promise() {
-      return this._readyCapability.promise;
-    }
-
-    get port() {
-      return this._port;
-    }
-
-    get messageHandler() {
-      return this._messageHandler;
-    }
-
-    _initializeFromPort(port) {
-      this._port = port;
-      this._messageHandler = new MessageHandler("main", "worker", port);
-      this._messageHandler.on("ready", function () {
-        // Ignoring 'ready' event -- MessageHandler shall be already initialized
-        // and ready to accept the messages.
-      });
-      this._readyCapability.resolve();
-    }
-
-    _initialize() {
-      // If worker support isn't disabled explicit and the browser has worker
-      // support, create a new web worker and test if it/the browser fulfills
-      // all requirements to run parts of pdf.js in a web worker.
-      // Right now, the requirement is, that an Uint8Array is still an
-      // Uint8Array as it arrives on the worker. (Chrome added this with v.15.)
-      if (
-        typeof Worker !== "undefined" &&
-        !isWorkerDisabled &&
-        !getMainThreadWorkerMessageHandler()
-      ) {
-        let workerSrc = getWorkerSrc();
-
-        try {
-          // Wraps workerSrc path into blob URL, if the former does not belong
-          // to the same origin.
-          if (
-            typeof PDFJSDev !== "undefined" &&
-            PDFJSDev.test("GENERIC") &&
-            !isSameOrigin(window.location.href, workerSrc)
-          ) {
-            workerSrc = createCDNWrapper(
-              new URL(workerSrc, window.location).href
-            );
-          }
-
-          // Some versions of FF can't create a worker on localhost, see:
-          // https://bugzilla.mozilla.org/show_bug.cgi?id=683280
-          const worker = new Worker(workerSrc);
-          const messageHandler = new MessageHandler("main", "worker", worker);
-          const terminateEarly = () => {
-            worker.removeEventListener("error", onWorkerError);
-            messageHandler.destroy();
-            worker.terminate();
-            if (this.destroyed) {
-              this._readyCapability.reject(new Error("Worker was destroyed"));
-            } else {
-              // Fall back to fake worker if the termination is caused by an
-              // error (e.g. NetworkError / SecurityError).
-              this._setupFakeWorker();
-            }
-          };
-
-          const onWorkerError = () => {
-            if (!this._webWorker) {
-              // Worker failed to initialize due to an error. Clean up and fall
-              // back to the fake worker.
-              terminateEarly();
-            }
-          };
-          worker.addEventListener("error", onWorkerError);
-
-          messageHandler.on("test", data => {
-            worker.removeEventListener("error", onWorkerError);
-            if (this.destroyed) {
-              terminateEarly();
-              return; // worker was destroyed
-            }
-            if (data) {
-              // supportTypedArray
-              this._messageHandler = messageHandler;
-              this._port = worker;
-              this._webWorker = worker;
-              if (!data.supportTransfers) {
-                this.postMessageTransfers = false;
-              }
-              this._readyCapability.resolve();
-              // Send global setting, e.g. verbosity level.
-              messageHandler.send("configure", {
-                verbosity: this.verbosity,
-              });
-            } else {
-              this._setupFakeWorker();
-              messageHandler.destroy();
-              worker.terminate();
-            }
-          });
-
-          messageHandler.on("ready", data => {
-            worker.removeEventListener("error", onWorkerError);
-            if (this.destroyed) {
-              terminateEarly();
-              return; // worker was destroyed
-            }
-            try {
-              sendTest();
-            } catch (e) {
-              // We need fallback to a faked worker.
-              this._setupFakeWorker();
-            }
-          });
-
-          const sendTest = () => {
-            const testObj = new Uint8Array([
-              this.postMessageTransfers ? 255 : 0,
-            ]);
-            // Some versions of Opera throw a DATA_CLONE_ERR on serializing the
-            // typed array. Also, checking if we can use transfers.
-            try {
-              messageHandler.send("test", testObj, [testObj.buffer]);
-            } catch (ex) {
-              warn("Cannot use postMessage transfers.");
-              testObj[0] = 0;
-              messageHandler.send("test", testObj);
-            }
-          };
-
-          // It might take time for worker to initialize (especially when AMD
-          // loader is used). We will try to send test immediately, and then
-          // when 'ready' message will arrive. The worker shall process only
-          // first received 'test'.
-          sendTest();
-          return;
-        } catch (e) {
-          info("The worker has been disabled.");
-        }
-      }
-      // Either workers are disabled, not supported or have thrown an exception.
-      // Thus, we fallback to a faked worker.
-      this._setupFakeWorker();
-    }
-
-    _setupFakeWorker() {
-      if (!isWorkerDisabled) {
-        warn("Setting up fake worker.");
-        isWorkerDisabled = true;
-      }
-
-      setupFakeWorkerGlobal()
-        .then(WorkerMessageHandler => {
-          if (this.destroyed) {
-            this._readyCapability.reject(new Error("Worker was destroyed"));
-            return;
-          }
-          const port = new LoopbackPort();
-          this._port = port;
-
-          // All fake workers use the same port, making id unique.
-          const id = "fake" + nextFakeWorkerId++;
-
-          // If the main thread is our worker, setup the handling for the
-          // messages -- the main thread sends to it self.
-          const workerHandler = new MessageHandler(id + "_worker", id, port);
-          WorkerMessageHandler.setup(workerHandler, port);
-
-          const messageHandler = new MessageHandler(id, id + "_worker", port);
-          this._messageHandler = messageHandler;
-          this._readyCapability.resolve();
-          // Send global setting, e.g. verbosity level.
-          messageHandler.send("configure", {
-            verbosity: this.verbosity,
-          });
-        })
-        .catch(reason => {
-          this._readyCapability.reject(
-            new Error(`Setting up fake worker failed: "${reason.message}".`)
-          );
-        });
-    }
-
-    /**
-     * Destroys the worker instance.
-     */
-    destroy() {
-      this.destroyed = true;
-      if (this._webWorker) {
-        // We need to terminate only web worker created resource.
-        this._webWorker.terminate();
-        this._webWorker = null;
-      }
-      pdfWorkerPorts.delete(this._port);
-      this._port = null;
-      if (this._messageHandler) {
-        this._messageHandler.destroy();
-        this._messageHandler = null;
-      }
-    }
-
-    /**
-     * @param {PDFWorkerParameters} params - The worker initialization
-     *   parameters.
-     */
-    static fromPort(params) {
-      if (!params || !params.port) {
-        throw new Error("PDFWorker.fromPort - invalid method signature.");
-      }
-      if (pdfWorkerPorts.has(params.port)) {
-        return pdfWorkerPorts.get(params.port);
-      }
-      return new PDFWorker(params);
-    }
-
-    static getWorkerSrc() {
-      return getWorkerSrc();
-    }
-  }
-  return PDFWorker;
-})();
+}
+if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
+  PDFWorker.getWorkerSrc = function () {
+    deprecated(
+      "`PDFWorker.getWorkerSrc()`, please use `PDFWorker.workerSrc` instead."
+    );
+    return this.workerSrc;
+  };
+}
 
 /**
  * For internal use only.
@@ -2321,6 +2394,55 @@ class WorkerTransport {
 
   get annotationStorage() {
     return shadow(this, "annotationStorage", new AnnotationStorage());
+  }
+
+  getRenderingIntent(
+    intent,
+    annotationMode = AnnotationMode.ENABLE,
+    isOpList = false
+  ) {
+    let renderingIntent = RenderingIntentFlag.DISPLAY; // Default value.
+    let lastModified = "";
+
+    switch (intent) {
+      case "any":
+        renderingIntent = RenderingIntentFlag.ANY;
+        break;
+      case "display":
+        break;
+      case "print":
+        renderingIntent = RenderingIntentFlag.PRINT;
+        break;
+      default:
+        warn(`getRenderingIntent - invalid intent: ${intent}`);
+    }
+
+    switch (annotationMode) {
+      case AnnotationMode.DISABLE:
+        renderingIntent += RenderingIntentFlag.ANNOTATIONS_DISABLE;
+        break;
+      case AnnotationMode.ENABLE:
+        break;
+      case AnnotationMode.ENABLE_FORMS:
+        renderingIntent += RenderingIntentFlag.ANNOTATIONS_FORMS;
+        break;
+      case AnnotationMode.ENABLE_STORAGE:
+        renderingIntent += RenderingIntentFlag.ANNOTATIONS_STORAGE;
+
+        lastModified = this.annotationStorage.lastModified;
+        break;
+      default:
+        warn(`getRenderingIntent - invalid annotationMode: ${annotationMode}`);
+    }
+
+    if (isOpList) {
+      renderingIntent += RenderingIntentFlag.OPLIST;
+    }
+
+    return {
+      renderingIntent,
+      cacheKey: `${renderingIntent}_${lastModified}`,
+    };
   }
 
   destroy() {
@@ -2534,17 +2656,8 @@ class WorkerTransport {
         case "UnknownErrorException":
           reason = new UnknownErrorException(ex.message, ex.details);
           break;
-      }
-      if (!(reason instanceof Error)) {
-        const msg = "DocException - expected a valid Error.";
-        if (
-          typeof PDFJSDev === "undefined" ||
-          PDFJSDev.test("!PRODUCTION || TESTING")
-        ) {
-          unreachable(msg);
-        } else {
-          warn(msg);
-        }
+        default:
+          unreachable("DocException - expected a valid Error.");
       }
       loadingTask._capability.reject(reason);
     });
@@ -2589,7 +2702,7 @@ class WorkerTransport {
       }
 
       const page = this.pageCache[data.pageIndex];
-      page._startRenderPage(data.transparency, data.intent);
+      page._startRenderPage(data.transparency, data.cacheKey);
     });
 
     messageHandler.on("commonobj", data => {
@@ -2782,13 +2895,9 @@ class WorkerTransport {
   }
 
   getPageIndex(ref) {
-    return this.messageHandler
-      .sendWithPromise("GetPageIndex", {
-        ref,
-      })
-      .catch(function (reason) {
-        return Promise.reject(new Error(reason));
-      });
+    return this.messageHandler.sendWithPromise("GetPageIndex", {
+      ref,
+    });
   }
 
   getAnnotations(pageIndex, intent) {

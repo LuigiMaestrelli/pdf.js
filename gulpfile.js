@@ -90,7 +90,7 @@ const AUTOPREFIXER_CONFIG = {
 const DEFINES = Object.freeze({
   PRODUCTION: true,
   SKIP_BABEL: true,
-  TESTING: false,
+  TESTING: undefined,
   // The main build targets:
   GENERIC: false,
   MOZCENTRAL: false,
@@ -179,7 +179,10 @@ function createWebpackConfig(
   const bundleDefines = builder.merge(defines, {
     BUNDLE_VERSION: versionInfo.version,
     BUNDLE_BUILD: versionInfo.commit,
-    TESTING: defines.TESTING || process.env.TESTING === "true",
+    TESTING:
+      defines.TESTING !== undefined
+        ? defines.TESTING
+        : process.env.TESTING === "true",
     DEFAULT_PREFERENCES: defaultPreferencesDir
       ? getDefaultPreferences(defaultPreferencesDir)
       : {},
@@ -208,9 +211,6 @@ function createWebpackConfig(
   }
   const babelExcludeRegExp = new RegExp(`(${babelExcludes.join("|")})`);
 
-  // Since logical assignment operators is a fairly new ECMAScript feature,
-  // for now we translate these regardless of the `SKIP_BABEL` value (with the
-  // exception of `MOZCENTRAL`/`TESTING`-builds where this isn't an issue).
   const babelPlugins = [
     "@babel/plugin-transform-modules-commonjs",
     [
@@ -221,9 +221,6 @@ function createWebpackConfig(
       },
     ],
   ];
-  if (!bundleDefines.MOZCENTRAL && !bundleDefines.TESTING) {
-    babelPlugins.push("@babel/plugin-proposal-logical-assignment-operators");
-  }
 
   const plugins = [];
   if (!disableLicenseHeader) {
@@ -683,7 +680,10 @@ function buildDefaultPreferences(defines, dir) {
     SKIP_BABEL: false,
     BUNDLE_VERSION: 0, // Dummy version
     BUNDLE_BUILD: 0, // Dummy build
-    TESTING: defines.TESTING || process.env.TESTING === "true",
+    TESTING:
+      defines.TESTING !== undefined
+        ? defines.TESTING
+        : process.env.TESTING === "true",
   });
 
   const inputStream = merge([
@@ -1416,7 +1416,6 @@ function buildLibHelper(bundleDefines, inputStream, outputDir) {
       sourceType: "module",
       presets: skipBabel ? undefined : ["@babel/preset-env"],
       plugins: [
-        "@babel/plugin-proposal-logical-assignment-operators",
         "@babel/plugin-transform-modules-commonjs",
         [
           "@babel/plugin-transform-runtime",
@@ -1459,7 +1458,10 @@ function buildLib(defines, dir) {
   const bundleDefines = builder.merge(defines, {
     BUNDLE_VERSION: versionInfo.version,
     BUNDLE_BUILD: versionInfo.commit,
-    TESTING: defines.TESTING || process.env.TESTING === "true",
+    TESTING:
+      defines.TESTING !== undefined
+        ? defines.TESTING
+        : process.env.TESTING === "true",
     DEFAULT_PREFERENCES: getDefaultPreferences(
       defines.SKIP_BABEL ? "lib/" : "lib-legacy/"
     ),
@@ -1831,6 +1833,7 @@ gulp.task(
       const defines = builder.merge(DEFINES, {
         CHROME: true,
         SKIP_BABEL: false,
+        TESTING: false,
       });
       return buildDefaultPreferences(defines, "lint-chromium/");
     },
@@ -2345,7 +2348,7 @@ gulp.task("externaltest", function (done) {
 });
 
 gulp.task(
-  "npm-test",
+  "ci-test",
   gulp.series(
     gulp.parallel("lint", "externaltest", "unittestcli"),
     "lint-chromium",

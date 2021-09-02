@@ -118,6 +118,11 @@ const MAX_ATTEMPTS_FOR_LRTB_LAYOUT = 2;
 // the loop after having MAX_EMPTY_PAGES empty pages.
 const MAX_EMPTY_PAGES = 3;
 
+// Default value to start with for the tabIndex property.
+const DEFAULT_TAB_INDEX = 5000;
+
+const HEADING_PATTERN = /^H(\d+)$/;
+
 function getBorderDims(node) {
   if (!node || !node.border) {
     return { w: 0, h: 0 };
@@ -173,7 +178,12 @@ function* getContainedChildren(node) {
 
 function setTabIndex(node) {
   while (node) {
-    if (!node.traversal || node[$tabIndex]) {
+    if (!node.traversal) {
+      node[$tabIndex] = node[$getParent]()[$tabIndex];
+      return;
+    }
+
+    if (node[$tabIndex]) {
       return;
     }
 
@@ -186,6 +196,7 @@ function setTabIndex(node) {
     }
 
     if (!next || !next.ref) {
+      node[$tabIndex] = node[$getParent]()[$tabIndex];
       return;
     }
 
@@ -198,6 +209,40 @@ function setTabIndex(node) {
     }
 
     node = ref[0];
+  }
+}
+
+function applyAssist(obj, attributes) {
+  const assist = obj.assist;
+  if (assist) {
+    const assistTitle = assist[$toHTML]();
+    if (assistTitle) {
+      attributes.title = assistTitle;
+    }
+    const role = assist.role;
+    const match = role.match(HEADING_PATTERN);
+    if (match) {
+      const ariaRole = "heading";
+      const ariaLevel = match[1];
+      attributes.role = ariaRole;
+      attributes["aria-level"] = ariaLevel;
+    }
+  }
+  // XXX: We could end up in a situation where the obj has a heading role and
+  // is also a table. For now prioritize the table role.
+  if (obj.layout === "table") {
+    attributes.role = "table";
+  } else if (obj.layout === "row") {
+    attributes.role = "row";
+  } else {
+    const parent = obj[$getParent]();
+    if (parent.layout === "row") {
+      if (parent.assist && parent.assist.role === "TH") {
+        attributes.role = "columnheader";
+      } else {
+        attributes.role = "cell";
+      }
+    }
   }
 }
 
@@ -491,6 +536,10 @@ class Area extends XFAObject {
   }
 
   [$isTransparent]() {
+    return true;
+  }
+
+  [$isBindable]() {
     return true;
   }
 
@@ -1216,8 +1265,8 @@ class CheckButton extends XFAObject {
         field.items.children[0][$toHTML]().html) ||
       [];
     const exportedValue = {
-      on: (items[0] || "on").toString(),
-      off: (items[1] || "off").toString(),
+      on: (items[0] !== undefined ? items[0] : "on").toString(),
+      off: (items[1] !== undefined ? items[1] : "off").toString(),
     };
 
     const value = (field.value && field.value[$text]()) || "off";
@@ -1247,6 +1296,7 @@ class CheckButton extends XFAObject {
         type,
         checked,
         xfaOn: exportedValue.on,
+        xfaOff: exportedValue.off,
         "aria-label": ariaLabel(field),
       },
     };
@@ -1755,6 +1805,8 @@ class Draw extends XFAObject {
   }
 
   [$toHTML](availableSpace) {
+    setTabIndex(this);
+
     if (this.presence === "hidden" || this.presence === "inactive") {
       return HTMLResult.EMPTY;
     }
@@ -1838,10 +1890,7 @@ class Draw extends XFAObject {
       children: [],
     };
 
-    const assist = this.assist ? this.assist[$toHTML]() : null;
-    if (assist) {
-      html.attributes.title = assist;
-    }
+    applyAssist(this, attributes);
 
     const bbox = computeBbox(this, html, availableSpace);
 
@@ -2309,6 +2358,7 @@ class ExclGroup extends XFAObject {
   }
 
   [$toHTML](availableSpace) {
+    setTabIndex(this);
     if (
       this.presence === "hidden" ||
       this.presence === "inactive" ||
@@ -2463,10 +2513,7 @@ class ExclGroup extends XFAObject {
       children,
     };
 
-    const assist = this.assist ? this.assist[$toHTML]() : null;
-    if (assist) {
-      html.attributes.title = assist;
-    }
+    applyAssist(this, attributes);
 
     delete this[$extra];
 
@@ -2611,6 +2658,8 @@ class Field extends XFAObject {
   }
 
   [$toHTML](availableSpace) {
+    setTabIndex(this);
+
     if (!this.ui) {
       // It's allowed to not have an ui, specs say:
       //   If the UI element contains no children or is not present,
@@ -2642,7 +2691,6 @@ class Field extends XFAObject {
       this.ui[$appendChild](node);
     }
 
-    setTabIndex(this);
     if (
       !this.ui ||
       this.presence === "hidden" ||
@@ -2803,10 +2851,7 @@ class Field extends XFAObject {
       children,
     };
 
-    const assist = this.assist ? this.assist[$toHTML]() : null;
-    if (assist) {
-      html.attributes.title = assist;
-    }
+    applyAssist(this, attributes);
 
     const borderStyle = this.border ? this.border[$toStyle]() : null;
     const bbox = computeBbox(this, html, availableSpace);
@@ -2856,6 +2901,11 @@ class Field extends XFAObject {
         }
 
         if (value) {
+          if (this.ui.numericEdit) {
+            value = parseFloat(value);
+            value = isNaN(value) ? "" : value.toString();
+          }
+
           if (ui.children[0].name === "textarea") {
             ui.children[0].attributes.textContent = value;
           } else {
@@ -4833,6 +4883,8 @@ class Subform extends XFAObject {
   }
 
   [$toHTML](availableSpace) {
+    setTabIndex(this);
+
     if (this.break) {
       // break element is deprecated so plug it on one of its replacement
       // breakBefore or breakAfter.
@@ -5090,10 +5142,7 @@ class Subform extends XFAObject {
       children,
     };
 
-    const assist = this.assist ? this.assist[$toHTML]() : null;
-    if (assist) {
-      html.attributes.title = assist;
-    }
+    applyAssist(this, attributes);
 
     const result = HTMLResult.success(createWrapper(this, html), bbox);
 
@@ -5150,6 +5199,10 @@ class SubformSet extends XFAObject {
       parent = parent[$getParent]();
     }
     return parent;
+  }
+
+  [$isBindable]() {
+    return true;
   }
 }
 
@@ -5255,7 +5308,7 @@ class Template extends XFAObject {
     if (this.subform.children.length >= 2) {
       warn("XFA - Several subforms in template node: please file a bug.");
     }
-    this[$tabIndex] = 1000;
+    this[$tabIndex] = DEFAULT_TAB_INDEX;
   }
 
   [$isSplittable]() {

@@ -13,6 +13,8 @@
  * limitations under the License.
  */
 
+/** @typedef {import("./interfaces").IPDFXfaLayerFactory} IPDFXfaLayerFactory */
+
 import { XfaLayer } from "pdfjs-lib";
 
 /**
@@ -20,17 +22,18 @@ import { XfaLayer } from "pdfjs-lib";
  * @property {HTMLDivElement} pageDiv
  * @property {PDFPage} pdfPage
  * @property {AnnotationStorage} [annotationStorage]
+ * @property {Object} [xfaHtml]
  */
 
 class XfaLayerBuilder {
   /**
    * @param {XfaLayerBuilderOptions} options
    */
-  constructor({ pageDiv, pdfPage, xfaHtml, annotationStorage }) {
+  constructor({ pageDiv, pdfPage, annotationStorage, xfaHtml }) {
     this.pageDiv = pageDiv;
     this.pdfPage = pdfPage;
-    this.xfaHtml = xfaHtml;
     this.annotationStorage = annotationStorage;
+    this.xfaHtml = xfaHtml;
 
     this.div = null;
     this._cancelled = false;
@@ -39,8 +42,9 @@ class XfaLayerBuilder {
   /**
    * @param {PageViewport} viewport
    * @param {string} intent (default value is 'display')
-   * @returns {Promise<void>} A promise that is resolved when rendering of the
-   *   annotations is complete.
+   * @returns {Promise<Object | void>} A promise that is resolved when rendering
+   *   of the XFA layer is complete. The first rendering will return an object
+   *   with a `textDivs` property that  can be used with the TextHighlighter.
    */
   render(viewport, intent = "display") {
     if (intent === "print") {
@@ -58,17 +62,18 @@ class XfaLayerBuilder {
       this.pageDiv.appendChild(div);
       parameters.div = div;
 
-      XfaLayer.render(parameters);
-      return Promise.resolve();
+      const result = XfaLayer.render(parameters);
+      return Promise.resolve(result);
     }
 
     // intent === "display"
     return this.pdfPage
       .getXfa()
       .then(xfa => {
-        if (this._cancelled) {
-          return;
+        if (this._cancelled || !xfa) {
+          return { textDivs: [] };
         }
+
         const parameters = {
           viewport: viewport.clone({ dontFlip: true }),
           div: this.div,
@@ -79,15 +84,13 @@ class XfaLayerBuilder {
         };
 
         if (this.div) {
-          XfaLayer.update(parameters);
-        } else {
-          // Create an xfa layer div and render the form
-          this.div = document.createElement("div");
-          this.pageDiv.appendChild(this.div);
-          parameters.div = this.div;
-
-          XfaLayer.render(parameters);
+          return XfaLayer.update(parameters);
         }
+        // Create an xfa layer div and render the form
+        this.div = document.createElement("div");
+        this.pageDiv.appendChild(this.div);
+        parameters.div = this.div;
+        return XfaLayer.render(parameters);
       })
       .catch(error => {
         console.error(error);

@@ -105,35 +105,12 @@ class IPDFLinkService {
 /**
  * @interface
  */
-class IPDFHistory {
-  /**
-   * @param {Object} params
-   */
-  initialize({ fingerprint, resetHistory = false, updateUrl = false }) {}
-
-  reset() {}
-
-  /**
-   * @param {Object} params
-   */
-  push({ namedDest = null, explicitDest, pageNumber }) {}
-
-  /**
-   * @param {number} pageNumber
-   */
-  pushPage(pageNumber) {}
-
-  pushCurrentPosition() {}
-
-  back() {}
-
-  forward() {}
-}
-
-/**
- * @interface
- */
 class IRenderableView {
+  constructor() {
+    /** @type {function | null} */
+    this.resume = null;
+  }
+
   /**
    * @type {string} - Unique ID for rendering queue.
    */
@@ -148,8 +125,6 @@ class IRenderableView {
    * @returns {Promise} Resolved on draw completion.
    */
   draw() {}
-
-  resume() {}
 }
 
 /**
@@ -162,6 +137,7 @@ class IPDFTextLayerFactory {
    * @param {PageViewport} viewport
    * @param {boolean} enhanceTextSelection
    * @param {EventBus} eventBus
+   * @param {TextHighlighter} highlighter
    * @returns {TextLayerBuilder}
    */
   createTextLayerBuilder(
@@ -169,7 +145,8 @@ class IPDFTextLayerFactory {
     pageIndex,
     viewport,
     enhanceTextSelection = false,
-    eventBus
+    eventBus,
+    highlighter
   ) {}
 }
 
@@ -184,7 +161,7 @@ class IPDFAnnotationLayerFactory {
    *   data in forms.
    * @param {string} [imageResourcesPath] - Path for image resources, mainly
    *   for annotation icons. Include trailing slash.
-   * @param {boolean} renderInteractiveForms
+   * @param {boolean} renderForms
    * @param {IL10n} l10n
    * @param {boolean} [enableScripting]
    * @param {Promise<boolean>} [hasJSActionsPromise]
@@ -196,7 +173,7 @@ class IPDFAnnotationLayerFactory {
     pdfPage,
     annotationStorage = null,
     imageResourcesPath = "",
-    renderInteractiveForms = true,
+    renderForms = true,
     l10n = undefined,
     enableScripting = false,
     hasJSActionsPromise = null,
@@ -263,7 +240,6 @@ class IL10n {
 export {
   IL10n,
   IPDFAnnotationLayerFactory,
-  IPDFHistory,
   IPDFLinkService,
   IPDFStructTreeLayerFactory,
   IPDFTextLayerFactory,

@@ -12,6 +12,7 @@
 !xref_command_missing.pdf
 !issue1155r.pdf
 !issue2017r.pdf
+!bug1727053.pdf
 !issue2391-1.pdf
 !issue2391-2.pdf
 !issue3214.pdf
@@ -109,6 +110,7 @@
 !issue11578_reduced.pdf
 !issue11651.pdf
 !issue11878.pdf
+!issue13916.pdf
 !bad-PageLabels.pdf
 !decodeACSuccessive.pdf
 !filled-background.pdf
@@ -441,6 +443,7 @@
 !issue8097_reduced.pdf
 !quadpoints.pdf
 !transparent.pdf
+!issue13931.pdf
 !xobject-image.pdf
 !issue6605.pdf
 !ccitt_EndOfBlock_false.pdf

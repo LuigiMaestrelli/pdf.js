@@ -76,6 +76,15 @@
        "link": false,
        "type": "eq"
     },
+    {  "id": "issue11532",
+       "file": "pdfs/issue11532.pdf",
+       "md5": "9216481d259ae2b8d747236e745cbc80",
+       "rounds": 1,
+       "link": true,
+       "firstPage": 2,
+       "lastPage": 2,
+       "type": "eq"
+    },
     {  "id": "issue11549",
        "file": "pdfs/issue11549_reduced.pdf",
        "md5": "a1ea636f413e02e10dbdf379ab4a99ae",
@@ -241,6 +250,12 @@
       "firstPage": 4,
       "lastPage": 4,
       "type": "eq"
+    },
+    {  "id": "bug1727053",
+       "file": "pdfs/bug1727053.pdf",
+       "md5": "8ed1e52da64000f9fdcb8b732f5a58f8",
+       "rounds": 1,
+       "type": "eq"
     },
     {  "id": "issue3999",
        "file": "pdfs/issue3999.pdf",
@@ -1286,6 +1301,14 @@
        "link": true,
        "rounds": 1,
        "enableXfa": true,
+       "type": "eq"
+    },
+    {  "id": "issue13433",
+       "file": "pdfs/issue13433.pdf",
+       "md5": "4038cd87ff48fd54b3c4a36593d2ba03",
+       "link": true,
+       "rounds": 1,
+       "lastPage": 1,
        "type": "eq"
     },
     {  "id": "xfa_issue13668",
@@ -4955,6 +4978,12 @@
       "type": "eq",
       "about": "JPX packets"
     },
+    {  "id": "issue13916",
+       "file": "pdfs/issue13916.pdf",
+       "md5": "5cfaff104b17f325610936875363541f",
+       "rounds": 1,
+       "type": "eq"
+    },
     {  "id": "bug766138",
       "file": "pdfs/bug766138.pdf",
       "md5": "b171f5cf8d9834348112fba60ee54f8c",
@@ -5012,6 +5041,21 @@
        "md5": "a9311230d2e3388070711be8748a1aa0",
        "rounds": 1,
        "type": "eq"
+    },
+    {  "id": "issue13931-default",
+       "file": "pdfs/issue13931.pdf",
+       "md5": "799d5025787115d22863ae23a3042491",
+       "rounds": 1,
+       "type": "eq"
+    },
+    {  "id": "issue13931-hidden",
+       "file": "pdfs/issue13931.pdf",
+       "md5": "799d5025787115d22863ae23a3042491",
+       "rounds": 1,
+       "type": "eq",
+       "optionalContent": {
+         "7R": false
+       }
     },
     {  "id": "issue2829",
       "file": "pdfs/issue2829.pdf",

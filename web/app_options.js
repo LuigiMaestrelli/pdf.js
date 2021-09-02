@@ -59,6 +59,11 @@ const OptionKind = {
  *              values below *explicitly* rather than relying on imported types.
  */
 const defaultOptions = {
+  annotationMode: {
+    /** @type {number} */
+    value: 2,
+    kind: OptionKind.VIEWER + OptionKind.PREFERENCE,
+  },
   cursorToolOnLoad: {
     /** @type {number} */
     value: 0,
@@ -145,11 +150,6 @@ const defaultOptions = {
     value: "canvas",
     kind: OptionKind.VIEWER,
   },
-  renderInteractiveForms: {
-    /** @type {boolean} */
-    value: true,
-    kind: OptionKind.VIEWER + OptionKind.PREFERENCE,
-  },
   sidebarViewOnLoad: {
     /** @type {number} */
     value: -1,
@@ -226,7 +226,9 @@ const defaultOptions = {
   },
   enableXfa: {
     /** @type {boolean} */
-    value: typeof PDFJSDev === "undefined" || !PDFJSDev.test("PRODUCTION"),
+    value:
+      typeof PDFJSDev === "undefined" ||
+      PDFJSDev.test("!PRODUCTION || TESTING"),
     kind: OptionKind.API + OptionKind.PREFERENCE,
   },
   fontExtraProperties: {
